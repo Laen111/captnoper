@@ -1,2 +1,4 @@
-# captngen
-Capt'n General: q- and v- dependent solar dark matter capture routine
+# captnoper
+Capt'n Oper: Non-Relativistic Effective Operator solar dark matter capture routine
+
+Used for testing
