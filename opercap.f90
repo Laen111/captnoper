@@ -409,7 +409,7 @@ subroutine captn_oper(mx_in, jx_in, niso_in, isotopeChosen, capped)
     niso = niso_in
     
     pickIsotope = isotopeChosen
-
+    print *, "Hey I am running captn_oper()!"
     ! temporary, the user will want to choose their coupling constants to match a model
     !                           c1,  c3,  c4, c5,   c6,  c7,  c8,  c9, c10, c11, c12, c13, c14, c15   
     !coupling_Array = reshape((/1.65d-8, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, &
@@ -427,18 +427,23 @@ subroutine captn_oper(mx_in, jx_in, niso_in, isotopeChosen, capped)
     ! completes integral (2.3) in paper 1501.03729 (gives dC/dV as fn of radius)
     !$OMP parallel default(none) shared(nlines, vesc_halo, epsabs, epsrel, limit, u_int_res, capped, tab_r, tab_dr) &
     !$OMP private(ri, result, abserr, neval, ier, alist, blist, rlist, elist, iord, last)
+    print *, "Hey this is the OMP section of captn_oper!"
     !$OMP do
     do ri=1,nlines !loop over the star
+        print *, "Hey, this is the OMP do loop of captn_oper!"
         result = 0.d0
         ri_for_omega = ri !accessed via the module
         !call integrator
+        print *, "I will now call the integrator!"
         call dsntdqagse(integrand_oper,dummyf,1.d0,vesc_halo, &
             epsabs,epsrel,limit,result,abserr,neval,ier,alist,blist,rlist,elist,iord,last)
         u_int_res(ri) = result
         capped = capped + tab_r(ri)**2*u_int_res(ri)*tab_dr(ri)
     end do
     !$OMP end do
+    print *, "The do loop is now over!"
     !$OMP end parallel
+    print *, "All done!"
     ! completes integral (2.4) of paper 1501.03729
     capped = 4.d0*pi*Rsun**3*capped
 
