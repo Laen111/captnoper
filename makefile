@@ -1,5 +1,5 @@
 FC=gfortran
-FOPT= -O3 -fopenmp -fPIC
+FOPT= -O3 -fPIC
 NUMDIR = ./numerical
 QAGDIR = ./numerical/dqag
 WDIR = ./Wfunctions

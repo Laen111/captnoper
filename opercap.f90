@@ -24,8 +24,7 @@ module opermod
                                                         0., 0., 0., 0., 0., 0./) !spins pulled from https://physics.nist.gov/PhysRefData/Handbook/element_name.htm
     double precision :: coupling_Array(14,2)
     double precision :: W_array(8,16,2,2,7)
-    integer :: ri_for_omega
-    !$OMP threadprivate(ri_for_omega)
+    
     contains
 
     function GFFI_H_oper(w,vesc,mq)
@@ -72,8 +71,6 @@ module opermod
         ! yConverse is the conversion factor to go from q^2 to y
         yConverse = 2/3.*((0.91*(mnuc*AtomicNumber_oper(iso))**(1./3)+0.3)*10**-13)**2/(2*hbar*c0)**2
         tally = 0
-        !$OMP parallel default(shared) private(k, G)
-        !$OMP do
         do k=1,7
             if (iso.eq.1) then
                 G = GFFI_H_oper(w,vesc,(k-1+qOffset))
@@ -82,8 +79,6 @@ module opermod
             end if
             tally = tally + W_array(Wtype,iso,tau,tauprime,k) * yConverse**(k-1) * G
         end do
-        !$OMP end do
-        !$OMP end parallel
         sumW = tally
     end function sumW
     
@@ -118,11 +113,7 @@ module opermod
         ! note! coupling constants are 2d array of length 14 (c1,c3,c4...c14,c15) (note absence of c2)
         ! this results in array call of index [1] -> c1, but a call of index [2] -> c3 !
         p_tot = 0.0
-        !$OMP parallel default(shared) private(tau)
-        !$OMP do
         do tau=1,2
-            !$OMP parallel default(shared) private(taup)
-            !$OMP do
             do taup=1,2
                 ! RM (c, v2, q2, v2q2)
                 ! c1,c1
@@ -253,11 +244,7 @@ module opermod
                     p_tot = p_tot + 1./mnuc**2 * RS1D(tau,taup,c,j_chi,coupling_Array) * sumW(w,vesc,i,tau,taup,8,1)
                 end if
             end do
-            !$OMP end do
-            !$OMP end parallel
         end do
-        !$OMP end do
-        !$OMP end parallel
         p_tot = p_tot  * hbar**2 * c0**2
     end function p_tot
 
@@ -284,9 +271,6 @@ module opermod
                     p_tot(w,vesc,pickIsotope)
             end if
         else ! if all the isotopes are being run
-            !!$OMP parallel default(none) shared(niso, mdm, u, w, tab_starrho, rindex, tab_mfr_oper, vesc) &
-            !!$OMP private(i, J, mu, muplus)
-            !!$OMP do
             do i = 1,niso
                 J = AtomicSpin_oper(i)
                 mu = mdm/mnuc/AtomicNumber_oper(i)
@@ -298,8 +282,6 @@ module opermod
                                             ((2*mnuc*AtomicNumber_oper(i))/(w**2*(2*J+1)))*p_tot(w,vesc,i)
                 end if
             end do
-            !!$OMP end do
-            !!$OMP end parallel
         end if
     end function OMEGA_oper
 end module opermod
@@ -409,7 +391,7 @@ subroutine captn_oper(mx_in, jx_in, niso_in, isotopeChosen, capped)
     niso = niso_in
     
     pickIsotope = isotopeChosen
-    print *, "Hey I am running captn_oper()!"
+
     ! temporary, the user will want to choose their coupling constants to match a model
     !                           c1,  c3,  c4, c5,   c6,  c7,  c8,  c9, c10, c11, c12, c13, c14, c15   
     !coupling_Array = reshape((/1.65d-8, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, &
@@ -423,28 +405,20 @@ subroutine captn_oper(mx_in, jx_in, niso_in, isotopeChosen, capped)
 
     !As far as I can tell, the second argument (fofuoveru) does nothing in this integrator.
     !I've sent it to an inert dummy just in case.
-    capped = 0.d0 
+    capped = 0.d0
+
     ! completes integral (2.3) in paper 1501.03729 (gives dC/dV as fn of radius)
-    !$OMP parallel default(none) shared(nlines, vesc_halo, epsabs, epsrel, limit, u_int_res, capped, tab_r, tab_dr) &
-    !$OMP private(ri, result, abserr, neval, ier, alist, blist, rlist, elist, iord, last)
-    print *, "Hey this is the OMP section of captn_oper!"
-    !$OMP do
     do ri=1,nlines !loop over the star
-        print *, "Hey, this is the OMP do loop of captn_oper!"
         result = 0.d0
         ri_for_omega = ri !accessed via the module
         !call integrator
-        print *, "I will now call the integrator!"
         call dsntdqagse(integrand_oper,dummyf,1.d0,vesc_halo, &
             epsabs,epsrel,limit,result,abserr,neval,ier,alist,blist,rlist,elist,iord,last)
         u_int_res(ri) = result
         capped = capped + tab_r(ri)**2*u_int_res(ri)*tab_dr(ri)
     end do
-    !$OMP end do
-    print *, "The do loop is now over!"
-    !$OMP end parallel
-    print *, "All done!"
-    ! completes integral (2.4) of paper 1501.03729
+
+    !completes integral (2.4) of paper 1501.03729
     capped = 4.d0*pi*Rsun**3*capped
 
     if (capped .gt. 1.d100) then
