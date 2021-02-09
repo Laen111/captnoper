@@ -13,17 +13,15 @@ module opermod
     double precision, parameter :: hbar=6.582d-25 !GeV*s
     !this goes with the Serenelli table format
     
-    ! integer :: pickIsotope
-    ! double precision :: j_chi
-
     double precision, parameter :: AtomicNumber_oper(16) = (/ 1., 3., 4., 12., 14., 16., 20., 23., 24., 27., &
                                                         28., 32., 40., 40., 56., 58./) !the isotopes the catena paper uses
     character (len=4) :: isotopes(16) = [character(len=4) :: "H","He3","He4","C12","N14","O16","Ne20","Na23","Mg24", &
-                                                                "Al27", "Si28","S32","Ar40","Ca40","Fe56","Ni58"]
+                                                                "Al27", "Si28","S32","Ar40","Ca40","Fe56","Ni58"] !the isotopes in text form to match against the W functions
     double precision, parameter :: AtomicSpin_oper(16) = (/ 0.5, 0.5, 0., 0., 1., 0., 0., 1.5, 0., 2.5, &
                                                         0., 0., 0., 0., 0., 0./) !spins pulled from https://physics.nist.gov/PhysRefData/Handbook/element_name.htm
     double precision :: coupling_Array(14,2)
     double precision :: W_array(8,16,2,2,7)
+    double precision :: yConverse_array(16)
 
     integer :: q_shared
     logical :: w_shared
@@ -41,7 +39,6 @@ module opermod
         if (mq .ne. -1) then
             G = (p/c0)**(2.d0*mq)*mdm*w**2/(2.d0*mu**mq)*1./(1.+mq)*((mu/muplus**2)**(mq+1)-(u**2/w**2)**(mq+1))
         else
-            !eps added to make the log finite: the value of eps does not affect the answer
             G = (p/c0)**(2.d0*mq)*mdm*w**2/(2.d0*mu**mq)*log(mu/muplus**2*w**2/(u)**2)
         endif
         GFFI_H_oper = G
@@ -56,10 +53,6 @@ module opermod
         muplus = (1.+mu)/2.
         u = sqrt(w**2-vesc**2)
         mN = A*mnuc
-        ! Ei  = 5.8407d-2/(mN*(0.91*mN**(1./3.)+0.3)**2)  ! old varient
-        ! Ei = 1./(2.*mN*2.671223d2/(45.d0*A**(-1./3.) - 25.d0*A**(-2./3.))) ! Aaron's suggestion
-        ! Ei = 9.391d-4*(45.d0*A**(-1./3.) - 25.d0*A**(-2./3.))/mN ! my calc
-        ! Ei = 4./(mN*2.671223d2/(45.d0*a**(-1./3.) - 25.d0*a**(-2./3.))) ! Aaron's fixed suggestion
         Ei = 1./4.d0/mN/264.114*(45.d0*A**(-1./3.)-25.d0*A**(-2./3.))
         B = .5*mdm*w**2/Ei/c0**2
         if (mq .eq. 0) then
@@ -136,9 +129,15 @@ subroutine captn_init_oper()
     ! populate_array will place the non-zero value into a chosen slot at runtime
     coupling_Array = reshape((/0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, &
                                 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0/), (/14, 2/))
+
+    do i = 1, 16
+        yConverse_array(i) = 264.114/(45.d0*AtomicNumber_oper(i)**(-1./3.)-25.d0*AtomicNumber_oper(i)**(-2./3.))
+    end do
 end subroutine captn_init_oper
 
-!   this is the integral over R in eqn 2.3 in 1501.03729
+! this is the integral over R in eqn 2.3 in 1501.03729
+! note that Omega there is expanded and broken into terms of the form const. * q^2n * exp{E_R/E_i}
+! I've doen this so that I can tap into the GFFI functions in eqn 2.9 of 1504.04378
 !THIS IS THE IMPORTANT FUNCTION: the integrand for the integral over u
 function integrand_oper(u, foveru)
     use opermod
@@ -159,27 +158,7 @@ function integrand_oper(u, foveru)
         integrand_oper = integrand_oper * w**2
     end if
 
-    ! int = vdist_over_u(u)/u*w*Omega_oper(ri_for_omega,w)
-    ! integrand_oper = int
 end function integrand_oper
-
-
-!   this is the integral over R in eqn 2.3 in 1501.03729
-!THIS IS THE IMPORTANT FUNCTION: the integrand for the integral over u
-function integrand_oper_extrawterm(u,foveru)
-    use opermod
-    double precision :: u, w, integrand_oper_extrawterm, foveru
-    external foveru
-
-    w = sqrt(u**2+vesc_shared_arr(rindex_shared)**2)
-
-    !Switch depending on whether we are capturing on Hydrogen or not
-    if (a_shared .gt. 2.d0) then
-        integrand_oper_extrawterm = foveru(u)*GFFI_A_oper(w,vesc_shared_arr(rindex_shared),a_shared,q_shared+1)
-    else
-        integrand_oper_extrawterm = foveru(u)*GFFI_H_oper(w,vesc_shared_arr(rindex_shared),q_shared+1)
-    end if
-end function integrand_oper_extrawterm
 
 
 ! call captn_oper to run capt'n with the effective operator method
@@ -192,20 +171,19 @@ subroutine captn_oper(mx_in, jx_in, niso, capped)!, isotopeChosen)
     double precision :: capped !this is the output
     double precision :: a, muminus, umax, umin, vesc, result
     double precision :: epsabs, epsrel, abserr, neval !for integrator
-    double precision :: ier,alist,blist,rlist,elist,iord,last!for integrator
+    double precision :: ier,alist,blist,rlist,elist,iord,last !for integrator
     double precision, allocatable :: u_int_res(:)
 
     ! specific to captn_oper
-    integer :: funcType, tau, taup, term_R, term_W ! loop indicies
-    integer :: qOffset
-    double precision :: J, j_chi, RFuncConst, WFuncConst, yConverse, mu_T
+    integer :: funcType, tau, taup, term_R, term_W, q_pow, w_pow ! loop indicies
+    integer :: q_functype, q_index
+    double precision :: J, j_chi, RFuncConst, WFuncConst, mu_T, prefactor_functype, factor_final, prefactor_current
     double precision :: RD, RM, RMP2, RP1, RP2, RS1, RS1D, RS2 !R functions stored in their own source files
+    double precision :: prefactor_array(niso,11,2)
 
     dimension alist(1000),blist(1000),elist(1000),iord(1000),rlist(1000)!for integrator
-    !external gausstest !this is just for testing
     external integrand_oper
     external integrand_oper_extrawterm
-    ! external dummyf
 
     epsabs=1.d-6
     epsrel=1.d-6
@@ -213,14 +191,6 @@ subroutine captn_oper(mx_in, jx_in, niso, capped)!, isotopeChosen)
 
     mdm = mx_in
     j_chi = jx_in
-    ! niso = niso_in
-    
-    ! pickIsotope = isotopeChosen
-
-    ! temporary, the user will want to choose their coupling constants to match a model
-    !                           c1,  c3,  c4, c5,   c6,  c7,  c8,  c9, c10, c11, c12, c13, c14, c15   
-    !coupling_Array = reshape((/1.65d-8, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, &
-                                !0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0/), (/14, 2/))
     
     if (.not. allocated(tab_r)) then 
         print*,"Errorface of errors: you haven't called captn_init to load the solar model!"
@@ -228,167 +198,157 @@ subroutine captn_oper(mx_in, jx_in, niso, capped)!, isotopeChosen)
     end if
     allocate(u_int_res(nlines))
 
-    !As far as I can tell, the second argument (fofuoveru) does nothing in this integrator.
-    !I've sent it to an inert dummy just in case.
-    
-    
-    capped = 0.d0
-    ! Bottom part of the integral is always zero -- happy little slow DM particles can always be captured.
-    umin = 0.d0
-    ! the current response function type in order: M, S2, S1, P2, MP2, P1, D, S1D
-    do funcType = 1,8
-        ! the first index on each response function
-        do tau=1,2
-            ! the second index on each response function
-            do taup=1,2
-                ! the possible terms for each R function in order: c, v2, q2, v2q2, q4, v2q4
-                do term_R = 1,6
-                    ! pick out the appropriate term's constant from a given R function of tau, taup, and term_R
-                    ! currently passes mnuc, and c0 - these are constants that could be shared to it through the shared module?
-                    select case (funcType)
-                    case (1)
-                        RFuncConst = RM(mnuc,c0,tau,taup,term_R-1,j_chi,coupling_Array) !!!!!!!!!!!!!!! in the R functions the R term starts at zero, should change it to start at 1 like other Fortran things do for consistency
-                    case (2)
-                        RFuncConst = RS2(mnuc,c0,tau,taup,term_R-1,j_chi,coupling_Array)
-                    case (3)
-                        RFuncConst = RS1(mnuc,c0,tau,taup,term_R-1,j_chi,coupling_Array)
-                    case (4)
-                        RFuncConst = RP2(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
-                    case (5)
-                        RFuncConst = RMP2(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
-                    case (6)
-                        RFuncConst = RP1(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
-                    case (7)
-                        RFuncConst = RD(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
-                    case (8)
-                        RFuncConst = RS1D(tau,taup,term_R-1,j_chi,coupling_Array)
-                    case default
-                        RFuncConst = 0.
-                        print*, "Um, I ran out of R functions to choose from?"
-                    end select
+    do eli = 1, niso
+        do q_pow = 1, 11
+            do w_pow = 1, 2
+                prefactor_array(eli,q_pow,w_pow) = 0.d0
+            end do
+        end do
+    end do
 
-                    !!!!!!!!!!!!!!!!!!!!!! if I check here to see if RFuncConst is zero, I could skip the integrator call, no?
-                    !!!!!!!!!!!!!!!!!!!!!! what ever pops out of the integrator is just multiplied by this term, so if it's zero it'll kill the integrator's result off (and move on to the next iteration of the loop)
-                    if (RFuncConst.ne.0.) then
-                        qOffset = 0 ! qOffset is used to tell the GFFI how many extra q^2 terms come from the current R function term
-                        if (funcType.gt.3) then ! note that the functions following SigmaPrime in the P_tot sum are all multiplied by an extra factor of q^2/M_N 
-                            qOffset = qOffset + 1
-                        end if
-                        if ((term_R.eq.3) .or. (term_R.eq.4)) then ! add on the single q^2 term
-                            qOffset = qOffset + 1
-                        else if ((term_R.eq.5) .or. (term_R.eq.6)) then ! add on the two q^2 terms
-                            qOffset = qOffset + 2
-                        end if
+    ! First I set the entries in prefactor_array(niso,11,2)
+    ! These are the constants that mulitply the corresonding integral evaluation
+    do eli=1,niso !isotopeChosen, isotopeChosen
+        ! I'll need mu_T to include in the prefactor when there is a v^2 term
+        a = AtomicNumber_oper(eli)
+        mu_T = (mnuc*a*mdm)/(mnuc*a+mdm)
+
+        ! the current response function type in order: M, S2, S1, P2, MP2, P1, D, S1D
+        do funcType = 1,8
+
+            ! contribution to q^2 count from sum over function types
+            q_functype = 0
+            prefactor_functype = 1.
+            if ( functype.gt.3 ) then
+                q_functype = 1
+                prefactor_functype = 1./mnuc**2
+            end if
+
+            ! the first index on each response function
+            do tau=1,2
+
+                ! the second index on each response function
+                do taup=1,2
+
+                    ! the possible y-terms for each W function in order: y^0, y^1, y^2, y^3, y^4, y^5, y^6
+                    do term_W = 1,7
                         
-                        w_shared = .false.
-                        if((term_R.eq.2).or.(term_R.eq.4).or.(term_R.eq.6)) then ! if the current R term is one with a v_T^2 in it, this accounts for the v^2/c^2 upon expansion (we deal with the negative just after this do loop)
-                            w_shared = .true.
+                        WFuncConst = W_array(funcType,eli,tau,taup,term_W)
+
+                        ! skip if the result gets multiplied by zero in the WFunction
+                        if (WFuncConst.ne.0.) then
+
+                            ! the possible terms for each R function in order: c, v2, q2, v2q2, q4, v2q4
+                            do term_R = 1,6
+
+                                ! pick out the appropriate term's constant from a given R function of tau, taup, and term_R
+                                ! currently passes mnuc, and c0 - these are constants that could be shared to it through the shared module?
+                                select case (funcType)
+                                case (1)
+                                    RFuncConst = RM(mnuc,c0,tau,taup,term_R-1,j_chi,coupling_Array) !!!!!!!!!!!!!!! in the R functions the R term starts at zero, should change it to start at 1 like other Fortran things do for consistency
+                                case (2)
+                                    RFuncConst = RS2(mnuc,c0,tau,taup,term_R-1,j_chi,coupling_Array)
+                                case (3)
+                                    RFuncConst = RS1(mnuc,c0,tau,taup,term_R-1,j_chi,coupling_Array)
+                                case (4)
+                                    RFuncConst = RP2(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
+                                case (5)
+                                    RFuncConst = RMP2(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
+                                case (6)
+                                    RFuncConst = RP1(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
+                                case (7)
+                                    RFuncConst = RD(mnuc,tau,taup,term_R-1,j_chi,coupling_Array)
+                                case (8)
+                                    RFuncConst = RS1D(tau,taup,term_R-1,j_chi,coupling_Array)
+                                case default
+                                    RFuncConst = 0.
+                                    print*, "Um, I ran out of R functions to choose from?"
+                                end select
+
+                                ! skip if the result gets multiplied by zero in the RFunction
+                                if (RFuncConst.ne.0.) then
+
+                                    ! calculates the total number of q^2
+                                    q_index = 1 + q_functype + term_W - 1 + floor((term_R-1.)/2.)
+                                    prefactor_current = prefactor_functype*RFuncConst*WFuncConst*yConverse_array(eli)**(term_W-1)
+
+                                    ! check if term_R is even (in my index convention this corresponds to it having a v^2 in the term)
+                                    ! v^2 = w^2 - q^2/(2mu_T)^2
+                                    if ( mod(term_R,2).eq.0 ) then
+                                        ! this is the -q^2/(2mu_T)^2 contribution
+                                        ! it has one extra q^2 contribution compared to the current W & R function contributions
+                                        prefactor_array(eli,q_index+1,1) = prefactor_array(eli,q_index+1,1) - prefactor_current * &
+                                            (c0**2/(4.*mu_T**2)) ! The Rfunctions are programmed with the 1/c0^2 in their v_perp^2 term (so I need to un-correct it for the- q^2/(2*mu_T)^2, and leave it be for the w^2/c^2)
+                                        ! this is the +w^2 contribution
+                                        ! it has the same q^2 contribution, but has a v_perp^2 contribution
+                                        prefactor_array(eli,q_index,2) = prefactor_array(eli,q_index,2) + prefactor_current
+                                        
+                                    else
+                                        prefactor_array(eli,q_index,1) = prefactor_array(eli,q_index,1) + prefactor_current
+
+                                    end if
+                                end if
+                            end do !term_R
                         end if
+                    end do !term_W
+                end do !taup
+            end do !tau
+        end do !functype
+    end do !eli
 
-                        !Loop over the different elements
-                        do eli = 1,niso!isotopeChosen, isotopeChosen
-                            a = AtomicNumber_oper(eli)
-                            a_shared = a !make accessible via the module
+    ! now with all the prefactors computed, any 0.d0 entries in prefactor_array means that we can skip that integral evaluation!
+    capped = 0.d0
+    umin = 0.d0
+    do ri=1,nlines
+        vesc = tab_vesc(ri)
+        rindex_shared = ri !make accessible via the module
+        vesc_shared_arr(ri) = vesc !make accessible via the module
 
-                            mu = mdm/(mnuc*a)
-                            muplus = (1.+mu)/2.
-                            muminus = (mu-1.d0)/2.
+        do eli=1,niso !isotopeChosen, isotopeChosen
+            u_int_res(ri) = 0.d0
+            a = AtomicNumber_oper(eli)
+            a_shared = a !make accessible via the module
 
-                            J = AtomicSpin_oper(eli)
-                            !!!!!!!!!!!!!!!!!!!!!!!!!simplify yConverse mathematical opperation to help loop speed?
-                            ! yConverse = 2/3.*((0.91*(mnuc*a)**(1./3)+0.3)*10**-13)**2/(2*hbar*c0)**2 !the conversion factor between q and y: y = yConverse * q^2
-                            ! yConverse = (1.38E-27) * ( ((mnuc*a)**(1./3) + 0.33) / (hbar*c0) )**2 !should be less computationally demanding I think, unless the 10**-27 makes floats do weird stuff - could combine the 10**-27 with the (hbar*c0)**2 to get a less extreme float prefactor
-                            ! yConverse = 2.671223d2/(45.d0*a**(-1./3.) - 25.d0*a**(-2./3.)) ! Aaron's suggestion
-                            ! yConverse = (41.467/(45.d0*a**(-1./3.) - 25.d0*a**(-2./3.))) * (10.d-13/(2*hbar*c0))**2 ! my calc
-                            yConverse = 264.114/(45.d0*A**(-1./3.)-25.d0*A**(-2./3.))
-                            ! get the target nucleus-dm reduced mass mu_T
-                            mu_T = (mnuc*a*mdm)/(mnuc*a+mdm)
+            mu = mdm/(mnuc*a)
+            muplus = (1.+mu)/2.
+            muminus = (mu-1.d0)/2.
 
-                            ! for all terms, do this base calculation
-                            ! the possible y-terms for each W function in order: y^0, y^1, y^2, y^3, y^4, y^5, y^6
-                            do term_W = 1,7
-                                WFuncConst = W_array(funcType,eli,tau,taup,term_W)
-                                ! skip if the result gets multiplied by zero in the WFunction
-                                if (WFuncConst.ne.0.) then
-                                    q_shared = term_W-1+qOffset ! the GFFI call in the integrand needs to know this
+            J = AtomicSpin_oper(eli)
 
-                                    !Loop over the shells of constant radius in the star
-                                    ! use OMP on this loop: shares vesc_shared(needs to be an array of length ri to be shared with thread safety), umax(depends on vesc, not shared with other functions - make private), and the arrays over the index ri: u_int_res(ri), tab_starrho(ri), tab_mfr(ri,eli), tab_r(ri), tab_dr(ri)
-                                    ! $OMP parallel 
-                                    ! $OMP default(private) !(none) 
-                                    ! $OMP shared(vesc_shared_arr)  ! w_shared is sent to the integrand oper to turn on multiplycation by w^2 there!
-                                    do ri = 1, nlines
-                                        vesc = tab_vesc(ri)
-                                        rindex_shared = ri !make accessible via the module
-                                        vesc_shared_arr(ri) = vesc !make accessible via the module
-                                        ! Chop the top of the integral off at the smaller of the halo escape velocity or the minimum velocity required for capture.
-                                        umax = min(vesc * sqrt(mu)/abs(muminus), vesc_halo)
+            ! Chop the top of the integral off at the smaller of the halo escape velocity or the minimum velocity required for capture.
+            umax = min(vesc * sqrt(mu)/abs(muminus), vesc_halo)
 
-                                        u_int_res(ri) = 0.
-                                        !Call integrator
-                                        call dsntdqagse(integrand_oper,vdist_over_u,umin,umax, &
-                                        epsabs,epsrel,limit,u_int_res(ri),abserr,neval,ier,alist,blist,rlist,elist,iord,last)
+            do w_pow=1,2
+                ! toggles whether we integrate with the w^2 term on
+                w_shared = .false.
+                if(w_pow.eq.2) then
+                    w_shared = .true.
+                end if
 
-                                        ! now we deal with the extra negative term mentioned just earlier
-                                        if(w_shared) then 
-                                            result = 0.
-                                            !Call integrator
-                                            call dsntdqagse(integrand_oper_extrawterm,vdist_over_u,umin,umax, &
-                                            epsabs,epsrel,limit,result,abserr,neval,ier,alist,blist,rlist,elist,iord,last)
-                                            u_int_res(ri) = u_int_res(ri) - c0**2/(4.*mu_T**2) * result  ! The Rfunctions are programmed with the 1/c0^2 in their v_perp^2 term (so I need to un-correct it for the- q^2/(2*mu_T)^2, and leave it be for the w^2/c^2)
-                                            ! when w_shared is true, u_int_res(ri) contains the result of the integral performed with the w^2/c^2 term, here it is done on _extrawterm with the -q^2/(2*mu_T)^2 term (extra q^2 accounted for by _extrawterm)
-                                        end if
-                                        !!!!!!!!!!!!!!!!!!!!!!!!!!! the rest of these are multiplicative factors pulled out of the integral (and ideally canceled out to be minimally impactful on performance)
-                                        u_int_res(ri)=u_int_res(ri)*(2*mnuc*a)/(2*J+1) *RFuncConst*WFuncConst*yConverse**(term_W-1)
-                                        ! extra terms from sumW
-                                        ! u_int_res(ri) = u_int_res(ri) * WFuncConst * yConverse**(term_W-1)
-                                        ! extra terms from ptot
-                                        if (funcType.gt.3) then ! note that the functions following Sigma` in the P_tot sum are all multiplied by an extra factor of q^2/mnuc^2 
-                                            u_int_res(ri) = u_int_res(ri) * 1/mnuc**2
-                                        end if
-                                        ! u_int_res(ri) = u_int_res(ri) * RFuncConst * (hbar*c0)**2
-                                        ! extra terms from omega_oper
-                                        ! u_int_res(ri) = u_int_res(ri) * (2*mnuc*a)/(2*J+1)
-                                        !!!!!!!!!!!!!!!!!!!!!extra terms from captngeneral - check these, it seems Pat has different terms than what I get from my math, specifically this 2.d0*(muplus/mu)**2
-                                        ! u_int_res(ri) = u_int_res(ri)*2.d0*NAvo*tab_starrho(ri)*tab_mfr_oper(ri,eli)*(muplus/mdm)**2  ! this doesn't match catena plots
-                                        u_int_res(ri) = u_int_res(ri)*NAvo*tab_starrho(ri)*tab_mfr_oper(ri,eli)/(mnuc*a)
-                                        u_int_res(ri) = u_int_res(ri) * (hbar*c0)**2
+                do q_pow=1,11
+                    if ( prefactor_array(eli,q_pow,w_pow).ne.0. ) then
+                        result = 0.d0
+                        q_shared = q_pow - 1
+                        !Call integrator
+                        call dsntdqagse(integrand_oper,vdist_over_u,umin,umax, &
+                            epsabs,epsrel,limit,result,abserr,neval,ier,alist,blist,rlist,elist,iord,last)
 
-                                        capped = capped + tab_r(ri)**2*u_int_res(ri)*tab_dr(ri)
+                        u_int_res(ri) = u_int_res(ri) + result * prefactor_array(eli,q_pow,w_pow)
+                    end if
+                end do !q_pow
+            end do !w_pow
 
-                                        if (isnan(capped)) then
-                                            capped = 0.d0
-                                            stop 'NaN encountered whilst trying compute capture rate.'
-                                        end if
-                                    end do !ri
-                                    ! $OMP end parallel
-                                end if !WFuncConst>0
-                            end do !term_W
-                        end do !eli
-                    end if !RFuncConst>0
-                end do !term_R
-            end do !taup
-        end do !tau
-    end do !funcType
+            factor_final = (2*mnuc*a)/(2*J+1) * NAvo*tab_starrho(ri)*tab_mfr_oper(ri,eli)/(mnuc*a) * &
+                tab_r(ri)**2*tab_dr(ri) * (hbar*c0)**2
+            capped = capped + u_int_res(ri) * factor_final
+        end do !eli
+    end do !ri
 
-
-    ! ! completes integral (2.3) in paper 1501.03729 (gives dC/dV as fn of radius)
-    ! do ri=1,nlines !loop over the star
-    !     result = 0.d0
-    !     ri_for_omega = ri !accessed via the module
-    !     !call integrator
-    !     call dsntdqagse(integrand_oper,dummyf,1.d0,vesc_halo, &
-    !         epsabs,epsrel,limit,result,abserr,neval,ier,alist,blist,rlist,elist,iord,last)
-    !     u_int_res(ri) = result
-    !     capped = capped + tab_r(ri)**2*u_int_res(ri)*tab_dr(ri)
-    ! end do
-
-    !completes integral (2.4) of paper 1501.03729
     capped = 4.d0*pi*Rsun**3*capped
 
     if (capped .gt. 1.d100) then
-      print*,"Capt'n General says: Oh my, it looks like you are capturing an  &
-      infinite amount of dark matter in the Sun. Best to look into that."
+      print*,"Capt'n General says: Oh my, it looks like you are capturing an", &
+        "infinite amount of dark matter in the Sun. Best to look into that."
     end if
 end subroutine captn_oper
 
